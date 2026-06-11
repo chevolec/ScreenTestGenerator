@@ -24,6 +24,7 @@ python generate_test_pattern.py \
 
 ¿Qué genera cada patrón?
 | Patrón | Detalle|
+|-|-|
 |Grid | Cuadrícula adaptativa, diagonales, cruz central, círculo de aspecto, marcadores en esquinas|
 |Blanco | 255,255,255 puro con etiqueta|
 |Negro | 0,0,0 puro con etiqueta|
