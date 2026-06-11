@@ -24,13 +24,9 @@ python generate_test_pattern.py \
 
 ¿Qué genera cada patrón?
 | Patrón | Detalle|
-|-|-|
 |Grid | Cuadrícula adaptativa, diagonales, cruz central, círculo de aspecto, marcadores en esquinas|
-|-|-|
 |Blanco | 255,255,255 puro con etiqueta|
-|-|-|
 |Negro | 0,0,0 puro con etiqueta|
-|-|-|
 |SMPTE | HD 76% — 7 barras superiores, banda de referencia media, zona PLUGE inferior|
 
 El video sale como `test_pattern_WxH.mp4` a 60 fps, con una barra de progreso en terminal mientras genera. Los patrones y duraciones son completamente independientes entre sí vía argumentos.
