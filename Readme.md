@@ -31,3 +31,4 @@ python generate_test_pattern.py \
 |SMPTE | HD 76% — 7 barras superiores, banda de referencia media, zona PLUGE inferior|
 
 El video sale como `test_pattern_WxH.mp4` a 60 fps, con una barra de progreso en terminal mientras genera. Los patrones y duraciones son completamente independientes entre sí vía argumentos.
+.
