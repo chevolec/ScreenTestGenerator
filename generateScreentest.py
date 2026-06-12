@@ -1,28 +1,29 @@
 #!/usr/bin/env python3
 """
-Video Test Pattern Generator
-Genera un video MP4 con patrones de prueba para proyección:
-  1. Grid Test Pattern
-  2. Pantalla Blanca
-  3. Pantalla Negra
-  4. Barras de color SMPTE
+Video Test Pattern Generator + Slideshow Generator
+Genera un video MP4 con patrones de prueba para proyección, o un slideshow de imágenes.
 
-Requisitos:
-    pip install opencv-python numpy
-
-Uso:
-    python generate_test_pattern.py --width 1920 --height 1080 \
+Modo tester (default):
+    python generateScreentest.py --width 1920 --height 1080 \
         --grid-duration 10 --white-duration 5 --black-duration 5 --smpte-duration 10
 
+Modo slideshow:
+    python generateScreentest.py --slideshow --images-dir ./fotos --width 1920 --height 1080 \
+        --slide-duration 30 --transition-duration 0.5 --shuffle --show-filename \
+        --output mi_slideshow.mp4
+
     O en modo interactivo (sin argumentos):
-    python generate_test_pattern.py
+    python generateScreentest.py
 """
 
 import cv2
 import numpy as np
 import argparse
 import sys
-from typing import Tuple
+import os
+import random
+from typing import Tuple, List
+from PIL import Image
 
 
 # ─────────────────────────────────────────────
@@ -235,17 +236,191 @@ def write_segment(writer: cv2.VideoWriter,
 
 
 # ─────────────────────────────────────────────
+# SLIDESHOW
+# ─────────────────────────────────────────────
+
+SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+
+def load_images_from_dir(images_dir: str) -> List[str]:
+    """Retorna lista de rutas de imagen (formatos soportados) ordenadas alfabéticamente."""
+    if not os.path.isdir(images_dir):
+        print(f"ERROR: La carpeta '{images_dir}' no existe.")
+        sys.exit(1)
+
+    paths = sorted([
+        os.path.join(images_dir, f)
+        for f in os.listdir(images_dir)
+        if os.path.splitext(f)[1].lower() in SUPPORTED_EXTENSIONS
+    ])
+
+    if not paths:
+        print(f"ERROR: No se encontraron imágenes en '{images_dir}'.")
+        print(f"  Formatos soportados: {', '.join(SUPPORTED_EXTENSIONS)}")
+        sys.exit(1)
+
+    return paths
+
+
+def fit_image(img: np.ndarray, width: int, height: int) -> np.ndarray:
+    """Escala la imagen manteniendo aspect ratio con letterbox (barras negras).
+    Usa PIL Lanczos para máxima calidad en upscaling y downscaling."""
+    ih, iw = img.shape[:2]
+    scale = min(width / iw, height / ih)
+    new_w, new_h = int(iw * scale), int(ih * scale)
+
+    # Convertir BGR (OpenCV) → RGB (PIL) → resize con Lanczos → BGR
+    pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    pil_resized = pil_img.resize((new_w, new_h), Image.LANCZOS)
+    resized = cv2.cvtColor(np.array(pil_resized), cv2.COLOR_RGB2BGR)
+
+    canvas = np.zeros((height, width, 3), dtype=np.uint8)
+    x_off = (width  - new_w) // 2
+    y_off = (height - new_h) // 2
+    canvas[y_off:y_off + new_h, x_off:x_off + new_w] = resized
+    return canvas
+
+
+def draw_filename(frame: np.ndarray, filename: str) -> np.ndarray:
+    """Dibuja el nombre del archivo en la esquina inferior izquierda."""
+    frame = frame.copy()
+    h, w = frame.shape[:2]
+    font       = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = max(0.5, min(w, h) / 1200)
+    thickness  = max(1, int(font_scale * 2))
+    label      = os.path.basename(filename)
+
+    text_size, _ = cv2.getTextSize(label, font, font_scale, thickness)
+    tx = max(10, w // 60)
+    ty = h - max(12, h // 50)
+
+    # Sombra para legibilidad
+    cv2.putText(frame, label, (tx + 1, ty + 1), font, font_scale, (0, 0, 0),       thickness + 2, cv2.LINE_AA)
+    cv2.putText(frame, label, (tx,     ty),     font, font_scale, (255, 255, 255),  thickness,     cv2.LINE_AA)
+    return frame
+
+
+def make_wipe_transition(frame_a: np.ndarray, frame_b: np.ndarray,
+                          progress: float) -> np.ndarray:
+    """Transición barrido de izquierda a derecha. progress: 0.0 → 1.0"""
+    h, w = frame_a.shape[:2]
+    cut = int(w * progress)
+    result = frame_a.copy()
+    if cut > 0:
+        result[:, :cut] = frame_b[:, :cut]
+    return result
+
+
+def generate_slideshow(args: argparse.Namespace, width: int, height: int) -> None:
+    image_paths = load_images_from_dir(args.images_dir)
+
+    if args.shuffle:
+        random.shuffle(image_paths)
+
+    slide_duration    = args.slide_duration
+    trans_duration    = args.transition_duration
+    trans_frames      = max(1, int(trans_duration * FPS))
+    output            = args.output or f"slideshow_{width}x{height}.mp4"
+
+    total_sec = len(image_paths) * slide_duration + len(image_paths) * trans_duration
+    print(f"\n{'═'*55}")
+    print(f"  Slideshow Generator")
+    print(f"{'─'*55}")
+    print(f"  Resolución     : {width}×{height}")
+    print(f"  FPS            : {FPS}")
+    print(f"  Imágenes       : {len(image_paths)}")
+    print(f"  Duración/imagen: {slide_duration}s")
+    print(f"  Transición     : {trans_duration}s (barrido izq→der)")
+    print(f"  Orden          : {'aleatorio' if args.shuffle else 'alfabético'}")
+    print(f"  Mostrar nombre : {'sí' if args.show_filename else 'no'}")
+    print(f"  Duración total : ~{total_sec:.1f}s")
+    print(f"  Salida         : {output}")
+    print(f"{'═'*55}\n")
+
+    fourcc = cv2.VideoWriter_fourcc(*CODEC)
+    writer = cv2.VideoWriter(output, fourcc, FPS, (width, height))
+    if not writer.isOpened():
+        print("ERROR: No se pudo crear el VideoWriter.")
+        sys.exit(1)
+
+    slide_frames = slide_duration * FPS
+
+    loaded: List[np.ndarray] = []
+    for path in image_paths:
+        img = cv2.imread(path)
+        if img is None:
+            print(f"  ADVERTENCIA: No se pudo leer '{path}', se omite.")
+            continue
+        img = fit_image(img, width, height)
+        if args.show_filename:
+            img = draw_filename(img, path)
+        loaded.append(img)
+
+    if not loaded:
+        print("ERROR: Ninguna imagen pudo cargarse.")
+        writer.release()
+        sys.exit(1)
+
+    for idx, frame in enumerate(loaded):
+        label = f"[{idx+1}/{len(loaded)}] {os.path.basename(image_paths[idx])}"
+        print(f"  Imagen {label}")
+
+        # Frames estáticos de la imagen
+        for i in range(slide_frames):
+            writer.write(frame)
+            if (i + 1) % FPS == 0:
+                elapsed = (i + 1) // FPS
+                bar = "█" * elapsed + "░" * (slide_duration - elapsed)
+                print(f"    [{bar}] {elapsed}/{slide_duration}s", end="\r")
+        print()
+
+        # Transición hacia la siguiente imagen (excepto en la última)
+        if idx < len(loaded) - 1:
+            next_frame = loaded[idx + 1]
+            for t in range(trans_frames):
+                progress = (t + 1) / trans_frames
+                wipe = make_wipe_transition(frame, next_frame, progress)
+                writer.write(wipe)
+
+    writer.release()
+    print(f"\n✓ Slideshow generado: {output}")
+    print(f"  {len(loaded)} imágenes · {width}×{height} @ {FPS}fps\n")
+
+
+# ─────────────────────────────────────────────
 # ARGUMENTOS CLI
 # ─────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Genera un video MP4 de patrones de prueba para proyección."
+        description="Genera un video MP4 de patrones de prueba o slideshow de imágenes."
     )
-    parser.add_argument("--width",          type=int, default=None,
+
+    # ── Modo ────────────────────────────────────────────────────────────────
+    parser.add_argument("--slideshow",   action="store_true",
+                        help="Activa el modo slideshow de imágenes")
+
+    # ── Resolución (compartida) ──────────────────────────────────────────────
+    parser.add_argument("--width",       type=int, default=None,
                         help="Ancho en píxeles (ej. 1920)")
-    parser.add_argument("--height",         type=int, default=None,
+    parser.add_argument("--height",      type=int, default=None,
                         help="Alto en píxeles (ej. 1080)")
+    parser.add_argument("--output",      type=str, default=None,
+                        help="Nombre del archivo de salida")
+
+    # ── Parámetros slideshow ─────────────────────────────────────────────────
+    parser.add_argument("--images-dir",          type=str,   default=None,
+                        help="Carpeta con las imágenes para el slideshow")
+    parser.add_argument("--slide-duration",      type=int,   default=30,
+                        help="Duración de cada imagen en segundos (default: 30)")
+    parser.add_argument("--transition-duration", type=float, default=0.5,
+                        help="Duración de la transición en segundos (default: 0.5)")
+    parser.add_argument("--shuffle",             action="store_true",
+                        help="Mostrar imágenes en orden aleatorio")
+    parser.add_argument("--show-filename",       action="store_true",
+                        help="Mostrar el nombre del archivo sobre cada imagen")
+
+    # ── Parámetros tester ────────────────────────────────────────────────────
     parser.add_argument("--grid-duration",  type=int, default=10,
                         help="Duración del Grid Pattern en segundos (default: 10)")
     parser.add_argument("--white-duration", type=int, default=5,
@@ -254,8 +429,7 @@ def parse_args() -> argparse.Namespace:
                         help="Duración de la pantalla negra en segundos (default: 5)")
     parser.add_argument("--smpte-duration", type=int, default=10,
                         help="Duración de las barras SMPTE en segundos (default: 10)")
-    parser.add_argument("--output",         type=str, default=None,
-                        help="Nombre del archivo de salida (default: test_pattern_WxH.mp4)")
+
     return parser.parse_args()
 
 
@@ -304,7 +478,14 @@ def main() -> None:
         print("ERROR: La resolución debe ser mayor que cero.")
         sys.exit(1)
 
-    # ── Duraciones ───────────────────────────────────────────────────────────
+    # ── Modo slideshow ───────────────────────────────────────────────────────
+    if args.slideshow:
+        if not args.images_dir:
+            args.images_dir = input("  Carpeta de imágenes: ").strip()
+        generate_slideshow(args, width, height)
+        return
+
+    # ── Modo tester (default) ────────────────────────────────────────────────
     durations = {
         "grid":  args.grid_duration,
         "white": args.white_duration,
@@ -313,8 +494,6 @@ def main() -> None:
     }
 
     total_sec = sum(durations.values())
-
-    # ── Archivo de salida ────────────────────────────────────────────────────
     output = args.output or f"test_pattern_{width}x{height}.mp4"
 
     print(f"\n{'═'*55}")
@@ -328,7 +507,6 @@ def main() -> None:
     print(f"  Salida     : {output}")
     print(f"{'═'*55}\n")
 
-    # ── VideoWriter ──────────────────────────────────────────────────────────
     fourcc = cv2.VideoWriter_fourcc(*CODEC)
     writer = cv2.VideoWriter(output, fourcc, FPS, (width, height))
 
@@ -336,7 +514,6 @@ def main() -> None:
         print("ERROR: No se pudo crear el VideoWriter. Verifica que OpenCV tenga soporte H.264.")
         sys.exit(1)
 
-    # ── Generar frames por patrón ────────────────────────────────────────────
     segments = [
         (make_grid_frame(width, height),
          durations["grid"],  "Grid Test Pattern"),
